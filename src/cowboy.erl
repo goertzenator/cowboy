@@ -37,6 +37,9 @@
 	fun((http_status(), http_headers(), iodata(), Req) -> Req).
 -export_type([onresponse_fun/0]).
 
+-type onconnect_fun() :: fun((Socket::any(), Transport::module()) -> [{atom(), any()}]).
+-export_type([onconnect_fun/0]).
+
 %% @doc Start an HTTP listener.
 -spec start_http(ranch:ref(), non_neg_integer(), ranch_tcp:opts(),
 	cowboy_protocol:opts()) -> {ok, pid()} | {error, any()}.

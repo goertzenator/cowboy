@@ -41,7 +41,7 @@
 -module(cowboy_req).
 
 %% Request API.
--export([new/14]).
+-export([new/15]).
 -export([method/1]).
 -export([version/1]).
 -export([peer/1]).
@@ -70,6 +70,9 @@
 -export([meta/2]).
 -export([meta/3]).
 -export([set_meta/3]).
+-export([conn_meta/2]).
+-export([conn_meta/3]).
+-export([set_conn_meta/3]).
 
 %% Request body API.
 -export([has_body/1]).
@@ -158,6 +161,7 @@
 	p_headers = [] :: [any()], %% @todo Improve those specs.
 	cookies = undefined :: undefined | [{binary(), binary()}],
 	meta = [] :: [{atom(), any()}],
+        conn_meta = [] :: [{atom(), any()}],
 
 	%% Request body.
 	body_state = waiting :: waiting | done | {stream, non_neg_integer(),
@@ -195,15 +199,16 @@
 	binary(), binary(), binary(),
 	cowboy:http_version(), cowboy:http_headers(), binary(),
 	inet:port_number() | undefined, binary(), boolean(), boolean(),
-	undefined | cowboy:onresponse_fun())
+	undefined | cowboy:onresponse_fun(),
+        [{atom(), any()}])
 	-> req().
 new(Socket, Transport, Peer, Method, Path, Query,
 		Version, Headers, Host, Port, Buffer, CanKeepalive,
-		Compress, OnResponse) ->
+		Compress, OnResponse, ConnMeta) ->
 	Req = #http_req{socket=Socket, transport=Transport, pid=self(), peer=Peer,
 		method=Method, path=Path, qs=Query, version=Version,
 		headers=Headers, host=Host, port=Port, buffer=Buffer,
-		resp_compress=Compress, onresponse=OnResponse},
+		resp_compress=Compress, onresponse=OnResponse, conn_meta=ConnMeta},
 	case CanKeepalive and (Version =:= 'HTTP/1.1') of
 		false ->
 			Req#http_req{connection=close};
@@ -546,6 +551,34 @@ meta(Name, Req, Default) ->
 -spec set_meta(atom(), any(), Req) -> Req when Req::req().
 set_meta(Name, Value, Req=#http_req{meta=Meta}) ->
 	Req#http_req{meta=[{Name, Value}|lists:keydelete(Name, 1, Meta)]}.
+
+%% @equiv conn_meta(Name, Req, undefined)
+-spec conn_meta(atom(), Req) -> {any() | undefined, Req} when Req::req().
+conn_meta(Name, Req) ->
+    conn_meta(Name, Req, undefined).
+
+%% @doc Return metadata information about the connection.
+%%
+%% Connection metadata persists from request to request on the same socket.
+%% It can be used for storing the client certificate, caching auth information, or
+%% anything else.  See onconnect hook for initializing connection metadata prior
+%% to processing any requests.
+-spec conn_meta(atom(), Req, any()) -> {any(), Req} when Req::req().
+conn_meta(Name, Req, Default) ->
+    case lists:keyfind(Name, 1, Req#http_req.conn_meta) of
+        {Name, Value} -> {Value, Req};
+        false -> {Default, Req}
+    end.
+
+%% @doc Set connection metadata information.
+%%
+%% You can use this function to attach information about the connection.
+%% This information is preserved from request to request on the same socket.
+%%
+%% If the value already exists it will be overwritten.
+-spec set_conn_meta(atom(), any(), Req) -> Req when Req::req().
+set_conn_meta(Name, Value, Req=#http_req{conn_meta=ConnMeta}) ->
+    Req#http_req{conn_meta=[{Name, Value}|lists:keydelete(Name, 1, ConnMeta)]}.
 
 %% Request Body API.
 
@@ -1177,6 +1210,7 @@ g(headers, #http_req{headers=Ret}) -> Ret;
 g(host, #http_req{host=Ret}) -> Ret;
 g(host_info, #http_req{host_info=Ret}) -> Ret;
 g(meta, #http_req{meta=Ret}) -> Ret;
+g(conn_meta, #http_req{conn_meta=Ret}) -> Ret;
 g(method, #http_req{method=Ret}) -> Ret;
 g(multipart, #http_req{multipart=Ret}) -> Ret;
 g(onresponse, #http_req{onresponse=Ret}) -> Ret;
@@ -1208,6 +1242,7 @@ set([{headers, Val}|Tail], Req) -> set(Tail, Req#http_req{headers=Val});
 set([{host, Val}|Tail], Req) -> set(Tail, Req#http_req{host=Val});
 set([{host_info, Val}|Tail], Req) -> set(Tail, Req#http_req{host_info=Val});
 set([{meta, Val}|Tail], Req) -> set(Tail, Req#http_req{meta=Val});
+set([{conn_meta, Val}|Tail], Req) -> set(Tail, Req#http_req{conn_meta=Val});
 set([{method, Val}|Tail], Req) -> set(Tail, Req#http_req{method=Val});
 set([{multipart, Val}|Tail], Req) -> set(Tail, Req#http_req{multipart=Val});
 set([{onresponse, Val}|Tail], Req) -> set(Tail, Req#http_req{onresponse=Val});

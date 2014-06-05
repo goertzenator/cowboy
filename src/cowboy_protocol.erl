@@ -67,6 +67,7 @@
 	| {middlewares, [module()]}
 	| {onrequest, cowboy:onrequest_fun()}
 	| {onresponse, cowboy:onresponse_fun()}
+        | {onconnect, cowboy:onconnect_fun()}
 	| {timeout, timeout()}].
 -export_type([opts/0]).
 
@@ -78,6 +79,7 @@
 	env :: cowboy_middleware:env(),
 	onrequest :: undefined | cowboy:onrequest_fun(),
 	onresponse = undefined :: undefined | cowboy:onresponse_fun(),
+        conn_meta = [] :: [{atom(), any()}],
 	max_empty_lines :: non_neg_integer(),
 	req_keepalive = 1 :: non_neg_integer(),
 	max_keepalive :: non_neg_integer(),
@@ -121,7 +123,12 @@ init(Ref, Socket, Transport, Opts) ->
 	Env = [{listener, Ref}|get_value(env, Opts, [])],
 	OnRequest = get_value(onrequest, Opts, undefined),
 	OnResponse = get_value(onresponse, Opts, undefined),
+        OnConnect =  get_value(onconnect, Opts, undefined),
 	Timeout = get_value(timeout, Opts, 5000),
+        ConnMeta = case OnConnect of
+                       undefined -> [];
+                       _ -> OnConnect(Socket, Transport)
+                   end,
 	ok = ranch:accept_ack(Ref),
 	wait_request(<<>>, #state{socket=Socket, transport=Transport,
 		middlewares=Middlewares, compress=Compress, env=Env,
@@ -129,7 +136,7 @@ init(Ref, Socket, Transport, Opts) ->
 		max_request_line_length=MaxRequestLineLength,
 		max_header_name_length=MaxHeaderNameLength,
 		max_header_value_length=MaxHeaderValueLength, max_headers=MaxHeaders,
-		onrequest=OnRequest, onresponse=OnResponse,
+		onrequest=OnRequest, onresponse=OnResponse, conn_meta=ConnMeta,
 		timeout=Timeout, until=until(Timeout)}, 0).
 
 -spec until(timeout()) -> non_neg_integer() | infinity.
@@ -490,13 +497,15 @@ parse_host(<< C, Rest/bits >>, E, Acc) ->
 
 request(Buffer, State=#state{socket=Socket, transport=Transport,
 		req_keepalive=ReqKeepalive, max_keepalive=MaxKeepalive,
-		compress=Compress, onresponse=OnResponse},
+		compress=Compress, onresponse=OnResponse,
+                conn_meta=ConnMeta},
 		Method, Path, Query, Version, Headers, Host, Port) ->
 	case Transport:peername(Socket) of
 		{ok, Peer} ->
 			Req = cowboy_req:new(Socket, Transport, Peer, Method, Path,
 				Query, Version, Headers, Host, Port, Buffer,
-				ReqKeepalive < MaxKeepalive, Compress, OnResponse),
+				ReqKeepalive < MaxKeepalive, Compress, OnResponse,
+                                ConnMeta),
 			onrequest(Req, State);
 		{error, _} ->
 			%% Couldn't read the peer address; connection is gone.
@@ -573,7 +582,8 @@ next_request(Req, State=#state{req_keepalive=Keepalive, timeout=Timeout},
 			if HandlerRes =:= ok, Buffer =/= close ->
 					?MODULE:parse_request(Buffer,
 						State#state{req_keepalive=Keepalive + 1,
-						until=until(Timeout)}, 0);
+						until=until(Timeout),
+                                                conn_meta=cowboy_req:get(conn_meta,Req)}, 0);
 				true ->
 					terminate(State)
 			end
